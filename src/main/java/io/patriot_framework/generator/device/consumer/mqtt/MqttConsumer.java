@@ -27,7 +27,7 @@ import org.eclipse.paho.client.mqttv3.MqttAsyncClient;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import sun.reflect.generics.reflectiveObjects.NotImplementedException;
+import java.lang.UnsupportedOperationException;
 
 import java.util.List;
 
@@ -90,6 +90,6 @@ public final class MqttConsumer extends AbstractDevice implements Consumer {
 
     @Override
     public List<Data> requestData(Object... params) {
-        throw new NotImplementedException();
+        throw new UnsupportedOperationException();
     }
 }
