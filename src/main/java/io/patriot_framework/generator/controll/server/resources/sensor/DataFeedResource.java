@@ -1,5 +1,5 @@
 /*
- * Copyright 2019 Patriot project
+ * Copyright 2024 Patriot project
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -16,73 +16,144 @@
 
 package io.patriot_framework.generator.controll.server.resources.sensor;
 
-import com.fasterxml.jackson.core.JsonFactory;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.patriot_framework.generator.dataFeed.DataFeed;
-import io.patriot_framework.generator.dataFeed.DataFeedBean;
 import io.patriot_framework.generator.device.passive.sensors.Sensor;
+import io.patriot_framework.generator.utils.JSONSerializer;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.coap.CoAP;
+import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.core.server.resources.CoapExchange;
+import org.eclipse.californium.core.server.resources.Resource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.List;
 
 /**
- * Children resource of {@link SensorRootResource}. It handles all requests
- * aimed for {@link DataFeed} control.
+ * Represents a CoAP resource for handling concrete data-feed of the {@link Sensor}.
+ * This resource implements methods GET, PUT and DELETE.
  */
 public class DataFeedResource extends CoapResource {
-
+    public static final Logger LOGGER = LoggerFactory.getLogger(DataFeedResource.class);
     private Sensor sensor;
-
+    private String myLabel;
     private ObjectMapper mapper;
 
-    /**
-     * Creates new resource with name: dataFeed
-     *
-     * @param sensor instance of Sensor
-     */
-    public DataFeedResource(Sensor sensor) {
-        super("dataFeed");
-        this.sensor = sensor;
-
-        JsonFactory factory = new JsonFactory();
-        mapper = new ObjectMapper(factory);
+    private String getResourcePath() {
+        var parent = getParent();
+        StringBuilder path = new StringBuilder(getPath());
+        while (parent != null) {
+            path.insert(0, parent.getPath() + "/");
+            parent = parent.getParent();
+        }
+        return path.toString();
     }
 
     /**
-     * Method returns information about DataFeed
+     * Constructs a new instance of NewDataFeedResource.
      *
-     * @param exchange the CoapExchange for the simple API
+     * @param sensor The sensor associated with the data feed
+     * @param dataFeed The data feed of the sensor which should be associated with this resource
+     * @param mapper The object mapper for serialization/deserialization
+     */
+    public DataFeedResource(Sensor sensor, DataFeed dataFeed, ObjectMapper mapper) {
+        super(dataFeed.getLabel());
+        myLabel = dataFeed.getLabel();
+        this.sensor = sensor;
+        this.mapper = mapper;
+    }
+
+
+
+    private DataFeed getMyDataFeed() {
+        for(var dataFeed: sensor.getDataFeeds()) {
+            if (dataFeed.getLabel().equals(myLabel)) return dataFeed;
+        }
+        return null;
+    }
+
+
+    /**
+     * Handles a GET request by retrieving a data feed and serializing it to JSON for response.
+     *
+     * @param exchange The CoapExchange object representing the CoAP request and response
      */
     @Override
     public void handleGET(CoapExchange exchange) {
-        List<DataFeed> df = sensor.getDataFeeds();
-        exchange.respond(df.toString());
+        var dataFeed = getMyDataFeed();
+        if(dataFeed == null) {
+            exchange.respond(CoAP.ResponseCode.NOT_FOUND, "Data feed with given label not found");
+            return;
+        }
+        String responseBody = JSONSerializer.serializeDataFeed(dataFeed);
+        exchange.respond(CoAP.ResponseCode.CONTENT, responseBody, MediaTypeRegistry.APPLICATION_JSON);
     }
 
+
     /**
-     * Method should get new DataFeed in JSON format and add it to the list of DataFeeds
-     * for particular sensor.
+     * Method should replace data feed with new provided DataFeed in JSON format
+     * for corresponding sensor.
+     * New data-feed must have same label as original data-feed.
      *
-     * @param exchange the CoapExchange for the simple API
+     * @param exchange The CoAP exchange object for handling the request and response
      */
     @Override
-    public void handlePOST(CoapExchange exchange) {
+    public void handlePUT(CoapExchange exchange) {
         exchange.accept();
         String body = exchange.getRequestText();
 
-        DataFeedBean dataFeed = null;
+        DataFeed newDataFeed;
         try {
-            dataFeed = mapper.readValue(body, DataFeedBean.class);
+            newDataFeed = mapper.readValue(body, DataFeed.class);
         } catch (IOException e) {
-            e.printStackTrace();
+            exchange.respond(CoAP.ResponseCode.UNPROCESSABLE_ENTITY, "DataFeed cannot be deserialized");
+            LOGGER.warn(e.toString());
+            return;
         }
 
-        sensor.addDataFeed(dataFeed.getDataFeed());
+        if(newDataFeed.getLabel() == null || (!newDataFeed.getLabel().equals(myLabel))) {
+            exchange.respond(CoAP.ResponseCode.UNPROCESSABLE_ENTITY, "DataFeed must have same label");
+            return;
+        }
 
-        exchange.respond(CoAP.ResponseCode.CHANGED);
+        var myDataFeed = getMyDataFeed();
+        if(myDataFeed != null) {
+            sensor.removeDataFeed(myDataFeed);
+            sensor.addDataFeed(newDataFeed);
+            LOGGER.info("Data feed updated");
+            exchange.respond(CoAP.ResponseCode.CHANGED);
+            return;
+        }
+
+        try {
+            sensor.addDataFeed(newDataFeed);
+            getParent().add(new DataFeedResource(sensor, newDataFeed, mapper));
+            exchange.respond(CoAP.ResponseCode.CREATED);
+        } catch (UnsupportedOperationException exception) {
+            exchange.respond(CoAP.ResponseCode.CONFLICT, exception.getMessage());
+        }
     }
 
+
+    /**
+     * Handles a DELETE request for this CoAP resource.
+     *
+     * This method removes the data feed associated with this resource's sensor,
+     * responds with a DELETED status code, and deletes corresponding resource from CoAP server.
+     *
+     * @param exchange The CoapExchange object representing the CoAP request and response
+     */
+    @Override
+    public void handleDELETE(CoapExchange exchange) {
+        var dataFeed = getMyDataFeed();
+        sensor.removeDataFeed(dataFeed);
+        exchange.respond(CoAP.ResponseCode.DELETED);
+        Resource parent = getParent();
+        if (parent != null) {
+            parent.delete(this);
+            LOGGER.info("Coap resource on path: " + getURI() + "deleted");
+        }
+    }
 }

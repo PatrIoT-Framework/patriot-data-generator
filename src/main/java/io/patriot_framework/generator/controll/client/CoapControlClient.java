@@ -21,6 +21,8 @@ import org.eclipse.californium.core.CoapResponse;
 import org.eclipse.californium.core.WebLink;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
 import org.eclipse.californium.elements.exception.ConnectorException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Set;
@@ -36,6 +38,7 @@ import java.util.stream.Collectors;
  */
 public class CoapControlClient {
 
+    public static Logger LOGGER = LoggerFactory.getLogger(CoapControlClient.class);
     /**
      * The destination URI
      */
@@ -46,8 +49,14 @@ public class CoapControlClient {
      */
     private CoapClient client = new CoapClient();
 
+
     public CoapControlClient(String uri) {
         this.uri = uri;
+        client.setURI(uri);
+    }
+
+    public CoapControlClient(String ip, int port) {
+        this.uri = "coap://" + ip + ":" + port;
         client.setURI(uri);
     }
 
@@ -80,10 +89,16 @@ public class CoapControlClient {
         return client.post(payload, MediaTypeRegistry.TEXT_PLAIN);
     }
 
+    public CoapResponse put(String resource, String payload) throws ConnectorException, IOException {
+        client.setURI(getUri() + resource);
+
+        return client.put(payload, MediaTypeRegistry.TEXT_PLAIN);
+    }
+
     /**
      * Gets all resources/endpoints for specified label of an Device.
      * To achieve user friendly workflow, we implemented client-server communication with
-     * Chain of Responsibility Design Pattern. Therefore this method returns {@link ClientResourceHandler},
+     * Chain of Responsibility Design Pattern. Therefore this method returns {@link CoapDeviceHandler},
      * which is responsible for more accurate functionality.
      *
      * Example:
@@ -99,24 +114,46 @@ public class CoapControlClient {
      * @throws ConnectorException if an issue specific to the connector occurred
      * @throws IOException if any other issue (not specific to the connector) occurred
      */
-    public ClientResourceHandler getDevice(String label) throws ConnectorException, IOException {
+    public CoapDeviceHandler getDevice(String label) throws ConnectorException, IOException {
         Pattern pattern = Pattern.compile(String.format("/%s(/|$)", label));
-
-        Set<String> deviceEndpoints = client.discover()
-                .stream()
-                .map(WebLink::getURI)
-                .filter(pattern.asPredicate())
-                .collect(Collectors.toSet());
-
-        return new ClientResourceHandler(this, deviceEndpoints, label);
+        return new CoapDeviceHandler(this, getEndpoints(pattern), label);
     }
+
+
+    public CoapSensorHandler getSensor(String label) {
+        Pattern pattern = Pattern.compile(String.format("/sensor/%s(/|$)", label));
+        return new CoapSensorHandler(this, getEndpoints(pattern), label);
+    }
+
+
+    public CoapActuatorHandler getActuator(String label) {
+        Pattern pattern = Pattern.compile(String.format("/actuator/%s(/|$)", label));
+        return new CoapActuatorHandler(this, getEndpoints(pattern), label);
+    }
+
 
     public String getUri() {
         return uri;
     }
 
+
     public void setUri(String uri) {
         this.uri = uri;
     }
 
+
+    private Set<String> getEndpoints(Pattern pattern) {
+        Set<String> deviceEndpoints;
+        try {
+            deviceEndpoints = client.discover()
+                    .stream()
+                    .map(WebLink::getURI)
+                    .filter(pattern.asPredicate())
+                    .collect(Collectors.toSet());
+        } catch ( ConnectorException | IOException e) {
+            LOGGER.warn(e.getMessage());
+            return null;
+        }
+        return deviceEndpoints;
+    }
 }
